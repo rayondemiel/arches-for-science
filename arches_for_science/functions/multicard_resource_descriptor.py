@@ -1,5 +1,9 @@
+import re
+import uuid
 from arches.app.functions.primary_descriptors import AbstractPrimaryDescriptorsFunction
+from arches.app.models import models
 from arches.app.models.system_settings import settings
+from arches.app.datatypes.datatypes import DataTypeFactory
 
 from django.utils.translation import get_language, gettext as _
 
@@ -34,24 +38,70 @@ details = {
 
 
 class MulticardResourceDescriptor(AbstractPrimaryDescriptorsFunction):
-    """Implemented in the database via triggers on tiles table.
-
-    This implementation just fetches the calculated result from the db."""
+    """
+    Function for processing multi-card resource descriptors by extracting node values
+    based on node aliases rather than node names.
+    """
 
     def get_primary_descriptor_from_nodes(self, resource, config, context=None, descriptor=None):
-        resource.refresh_from_db(fields={"name", "descriptors"})
-        resource.get_descriptor_language(context)
+        datatype_factory = None
+        language = context.get("language") if context else None
+        string_template = config.get("string_template", "")
+        result = string_template
+        updated = False
 
-        result = ""
-        requested_language = context.get("language", None) if context else None
-
-        lookup_language = requested_language or get_language() or settings.LANGUAGE_CODE
         try:
-            result = resource.descriptors[lookup_language][descriptor]
-        except KeyError:
-            pass
+            node_aliases = []
+            matches = re.findall(r"<([^>]+)>", string_template)
+            if matches:
+                node_aliases = matches
+
+            nodes_by_alias = {}
+            for node in models.Node.objects.filter(graph=resource.graph):
+                if node.alias in node_aliases:
+                    nodes_by_alias[node.alias] = node
+
+            processed_tiles = set()
+            for alias, node in nodes_by_alias.items():
+                nodeid = str(node.nodeid)
+                nodegroup_id = node.nodegroup_id
+
+                tiles = models.TileModel.objects.filter(
+                    nodegroup_id=nodegroup_id, resourceinstance_id=resource.resourceinstanceid
+                ).order_by("sortorder")
+
+                for tile in tiles:
+                    if tile.tileid in processed_tiles:
+                        continue
+
+                    if nodeid in tile.data and tile.data[nodeid] is not None:
+                        if not datatype_factory:
+                            datatype_factory = DataTypeFactory()
+
+                        datatype = datatype_factory.get_instance(node.datatype)
+                        value = datatype.get_display_value(tile, node, language=language)
+
+                        if value is None:
+                            value = ""
+
+                        placeholder = f"<{alias}>"
+                        result = result.replace(placeholder, str(value))
+                        updated = True
+
+                        processed_tiles.add(tile.tileid)
+        except Exception as e:
+            import logging
+
+            logging.error(f"Error in MulticardResourceDescriptor Function: {e}")
 
         if result.strip() == "":
             result = _("Undefined")
+
+        if not updated:
+            try:
+                lookup_language = language or get_language() or settings.LANGUAGE_CODE
+                result = resource.descriptors[lookup_language][descriptor]
+            except (KeyError, TypeError):
+                pass
 
         return result
