@@ -1,11 +1,15 @@
+import logging
 import re
-import uuid
 from arches.app.functions.primary_descriptors import AbstractPrimaryDescriptorsFunction
 from arches.app.models import models
 from arches.app.models.system_settings import settings
 from arches.app.datatypes.datatypes import DataTypeFactory
 
 from django.utils.translation import get_language, gettext as _
+
+
+logger = logging.getLogger(__name__)
+
 
 # This duplicates the configuration declared in migration 0004,
 # but on first package load, the function will be re-registered, because
@@ -84,15 +88,12 @@ class MulticardResourceDescriptor(AbstractPrimaryDescriptorsFunction):
                         if value is None:
                             value = ""
 
-                        placeholder = f"<{alias}>"
-                        result = result.replace(placeholder, str(value))
+                        result = result.replace(f"<{alias}>", str(value))
                         updated = True
 
                         processed_tiles.add(tile.tileid)
         except Exception as e:
-            import logging
-
-            logging.error(f"Error in MulticardResourceDescriptor Function: {e}")
+            logger.error(f"Error in MulticardResourceDescriptor Function: {e} -- {config['nodegroup_id']}")
 
         if result.strip() == "":
             result = _("Undefined")
